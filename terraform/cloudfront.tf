@@ -21,7 +21,9 @@ resource "aws_cloudfront_response_headers_policy" "security" {
   name = "${var.project_name}-security-headers"
 
   security_headers_config {
-    content_type_options {}
+    content_type_options {
+	  override = true
+	}
     frame_options {
       frame_option = "DENY"
       override     = true
