@@ -21,9 +21,7 @@ resource "aws_cloudfront_response_headers_policy" "security" {
   name = "${var.project_name}-security-headers"
 
   security_headers_config {
-    content_type_options {
-      override = true
-    }
+    content_type_options {}
     frame_options {
       frame_option = "DENY"
       override     = true
@@ -47,8 +45,8 @@ resource "aws_cloudfront_response_headers_policy" "security" {
 
   custom_headers_config {
     items {
-      header   = "X-Content-Type-Options"
-      value    = "nosniff"
+      header   = "X-CloudCDN-Enterprise"
+      value    = "true"
       override = true
     }
   }
