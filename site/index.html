@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CloudCDN Enterprise Demo</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <header class="hero">
+    <h1>🚀 CloudCDN Enterprise</h1>
+    <p>Powered by S3 + CloudFront + Terraform + GitHub Actions</p>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>边缘缓存已验证</h2>
+      <p>当前页面由 CloudFront 全球边缘节点分发。</p>
+      <p>节点 POP 城市：<code id="pop">加载中...</code></p>
+      <p>请求时间：<code id="time"></code></p>
+    </section>
+
+    <section class="card">
+      <h2>架构</h2>
+      <ul>
+        <li>🪣 S3 私有桶（版本控制 + SSE 加密）</li>
+        <li>⚡ CloudFront（HTTPS 强制 + 压缩 + HTTP/2/3）</li>
+        <li>🔒 OAC 安全访问 S3</li>
+        <li>🔐 ACM 免费证书（us-east-1）</li>
+        <li>🌍 Route 53 Alias 解析</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>© <span id="year"></span> CloudCDN Enterprise Demo</p>
+  </footer>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

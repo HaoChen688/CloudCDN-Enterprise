@@ -1,0 +1,161 @@
+name: CloudCDN CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action'
+        required: true
+        default: 'apply'
+        type: choice
+        options: [plan, apply, destroy]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+env:
+  TF_VERSION: "1.7.5"
+  TF_WORKING_DIR: "./terraform"
+  AWS_REGION_DEFAULT: "us-east-1"
+
+jobs:
+  terraform:
+    name: "Terraform"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    outputs:
+      bucket: ${{ steps.tf_outputs.outputs.bucket }}
+      distribution_id: ${{ steps.tf_outputs.outputs.distribution_id }}
+      site_url: ${{ steps.tf_outputs.outputs.site_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=cloudcdn/terraform.tfstate" \
+            -backend-config="region=${{ secrets.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -input=false \
+            -var="aws_region=${AWS_REGION_DEFAULT}" \
+            -var="domain_name=${{ secrets.DOMAIN_NAME }}" \
+            -var="subdomain=${{ secrets.SUBDOMAIN }}" \
+            -var="hosted_zone_id=${{ secrets.HOSTED_ZONE_ID }}" \
+            -out=tfplan
+        continue-on-error: true
+
+      - name: Comment Plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            const body = `#### Terraform Plan 📖 (CloudCDN @ us-east-1)
+            \`\`\`
+            ${process.env.PLAN}
+            \`\`\`
+            *Pushed by: @${{ github.actor }}*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Terraform Apply
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        run: terraform apply -auto-approve -input=false tfplan
+
+      - name: Terraform Destroy
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var="aws_region=${AWS_REGION_DEFAULT}" \
+            -var="domain_name=${{ secrets.DOMAIN_NAME }}" \
+            -var="subdomain=${{ secrets.SUBDOMAIN }}" \
+            -var="hosted_zone_id=${{ secrets.HOSTED_ZONE_ID }}"
+
+      - name: Capture Terraform Outputs
+        if: github.event_name != 'pull_request' && github.event.inputs.action != 'destroy'
+        id: tf_outputs
+        run: |
+          echo "bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
+          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
+          echo "site_url=$(terraform output -raw site_url)" >> $GITHUB_OUTPUT
+
+  deploy-site:
+    name: "Deploy Static Site & Invalidate Cache"
+    needs: terraform
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Sync site to S3
+        run: |
+          aws s3 sync ./site/ s3://${{ needs.terraform.outputs.bucket }}/ \
+            --delete \
+            --cache-control "public,max-age=3600" \
+            --exclude "*.html" \
+            --exclude "index.html"
+
+          # HTML 文件不缓存，保证内容即时更新
+          aws s3 sync ./site/ s3://${{ needs.terraform.outputs.bucket }}/ \
+            --delete \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --include "*.html"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ needs.terraform.outputs.distribution_id }} \
+            --paths "/*"
+
+      - name: Print site URL
+        run: |
+          echo "🌍 Site URL: ${{ needs.terraform.outputs.site_url }}"
+          echo "🌍 Site URL: ${{ needs.terraform.outputs.site_url }}" >> $GITHUB_STEP_SUMMARY
